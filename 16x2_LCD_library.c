@@ -151,9 +151,9 @@ void setCursor(unsigned char row, unsigned char column) //Sets the Address Count
 void sendNumber(uint16_t number)                         //Prints the 16-bit unsigned number on LCD
 {
 
-    unsigned char temporary[4]="   ";
-    unsigned char lsb, output_length=2;
-    while(number>0)
+    unsigned char temporary[4]="   ";			//The number is padded with 3 leading spaces 
+    unsigned char lsb, output_length=2;			//output_length should be n-1 when n is the number of leading spaces
+    while(number>0)					//This loop finds the LSB of number in 'decimal' and puts it ito the string from higher address to lower address
     {
         lsb = number % 10;
         temporary[output_length] = '0' + lsb;
@@ -161,5 +161,5 @@ void sendNumber(uint16_t number)                         //Prints the 16-bit uns
         number = (number - lsb)/10;
     }
 
-    sendString(temporary);
+    sendString(temporary);				//Prints the number on LCD(note: Set the AC accordingly before using sendNumber()
 }
