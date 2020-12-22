@@ -164,15 +164,21 @@ void setCursor(unsigned char row, unsigned char column) //Sets the Address Count
 void sendNumber(uint16_t number)                         //Prints the 16-bit unsigned number on LCD
 {
 
-    unsigned char temporary[4]="   ";			//The number is padded with 3 leading spaces 
-    unsigned char lsb, output_length=2;			//output_length should be n-1 when n is the number of leading spaces
-    while(number>0)					//This loop finds the LSB of number in 'decimal' and puts it ito the string from higher address to lower address
-    {
-        lsb = number % 10;
-        temporary[output_length] = '0' + lsb;
-        output_length--;
-        number = (number - lsb)/10;
-    }
+    uint8_t temporary[6];                                   //This function leaves no leading spaces in front of the number
 
-    sendString(temporary);				//Prints the number on LCD(note: Set the AC accordingly before using sendNumber()
+    temporary[0] = (number/10000) + '0'; number %= 10000;
+    temporary[1] = (number/1000) + '0'; number %= 1000;
+    temporary[2] = (number/100) + '0'; number %= 100;
+    temporary[3] = (number/10) + '0'; number %= 10;
+    temporary[4] = number + '0';
+    temporary[5] = '\0';
+
+    uint8_t counter = 0;
+    while(*(temporary + counter) == '0')
+        counter++;
+
+    if(counter < 5 ) sendString(temporary + counter);       //When the number is non-zero start printing from the first number
+    else sendString( temporary + 4 );                       //When the number is zero only print zero
+
 }
+
