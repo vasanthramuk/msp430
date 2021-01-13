@@ -37,7 +37,7 @@ int main(void)
 //Configuring the DCO for 1 MHZ
     DCOCTL = 0;
     BCSCTL1 = BC1_1MHZ;
-        DCOCTL = DCO_1MHZ;
+    DCOCTL = DCO_1MHZ;
 
 //Configuring the ACLK with VLO and dividing by 2
         BCSCTL1 |= DIVA_1;
