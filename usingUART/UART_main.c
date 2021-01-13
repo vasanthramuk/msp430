@@ -145,7 +145,7 @@ __interrupt void WDT_ISR(void){
     WDTCTL = WDTPW + WDTHOLD;
     __bic_SR_register_on_exit(LPM0_bits + GIE);
 }
-
+ 
 //--------------------------------------------function definition-------------------------------------------------------------//
 void sendToMonitor(uint8_t * byte)
 {
