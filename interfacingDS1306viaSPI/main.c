@@ -4,6 +4,7 @@
 //=====================GPIO===============//
 #define LED BIT0
 #define CE BIT3
+#define RTC_ALARM BIT0
 #define SPI_SOMI BIT6
 #define SPI_SIMO BIT7
 #define SPI_CLK BIT5
@@ -38,7 +39,7 @@
 //================================================//
 
 
-#define FORMATTED_TIME_LENGTH 18
+#define FORMATTED_TIME_LENGTH 20
 
 //=============================CURRENT TIME AND DAY================================//
 #define SECOND 0x00
@@ -89,10 +90,14 @@ void main(){
     configUART();
 
     while(1){
+
     readRTC();
     prepareTimeForPC();
 
     printTimeOnPC();
+
+    P2IE |= RTC_ALARM;
+    __bis_SR_register(LPM4_bits + GIE);
     }
 
 }
@@ -104,7 +109,7 @@ __interrupt void RX_ISR(void){
     if(IFG2 & UCB0RXIFG){
         currentTime[RXCount++] = UCB0RXBUF;         //This updates currentTime with RTC value
                                                     //It also acknowledges the interrupt by clearing UCB0RXIFG
-        if(RXCount > 7){
+        if(RXCount >= 7){
             IE2 &= ~UCB0RXIE;                           //After reception of all 7 bytes, disable further RX interrupts
             IFG2 &= ~UCB0RXIFG;
             __bic_SR_register_on_exit(LPM4_bits + GIE); //Also exit LPM4
@@ -121,7 +126,7 @@ __interrupt void TX_ISR(void){
        UCB0TXBUF = 0x55;       //This sends 0x55 which has no significance as we are only interested in RXed data
                                 //This acknowledges interrupt by clearing UCB0TXIFG
        TXCount++;
-        if(TXCount > 7){                    //Since we are Transmitting 7 bytes
+        if(TXCount >= 7){                    //Since we are Transmitting 7 bytes, the 8th TX is used for RECEIVING the 7 th character
             IE2 &= ~UCB0TXIE;
         }
     }
@@ -139,13 +144,22 @@ __interrupt void TX_ISR(void){
 
 }
 
-
+#pragma vector = PORT2_VECTOR
+__interrupt void PORT2_ISR(void){
+    if(P2IFG & RTC_ALARM){
+        P2IFG &= ~RTC_ALARM;                            //Acknowledges the Interrupt
+        __bic_SR_register_on_exit(LPM4_bits + GIE);
+    }
+}
 
 //=============================Function definition=============================//
 void configPort(){
     //Configuring GPIO
     P2OUT &= ~CE;
     P2DIR |= CE;
+
+    P2DIR &= ~RTC_ALARM;        //ALARM is input from RTC's INT1 pin
+    P2IES &= ~RTC_ALARM;        //Alarm is active high. So EDGE is rising
 
     //Configuring USCIB0
     P1SEL = SPI_SOMI + SPI_SIMO + SPI_CLK + UART_TX + UART_RX;
@@ -261,6 +275,10 @@ void prepareTimeForPC(){
         timeForPC[15] = UPNIBBLE(FORMAT_SECOND);
         timeForPC[16] = LOWNIBBLE(FORMAT_SECOND);
         timeForPC[17] = ' ';
+
+        //to insert Carriage Return
+        timeForPC[18] = 0x0d;
+        timeForPC[19] = 0x0a;
 
 }
 void printTimeOnPC(){
