@@ -10,7 +10,7 @@ void configADC(void);
 void configTimer(void);
 void portConfig(void);
 
-volatile unsigned int xyLocation[2];
+unsigned int xyLocation[2];
 volatile uint8_t currentChannel = 0;
 
 int main(void)
