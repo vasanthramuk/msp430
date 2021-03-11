@@ -33,9 +33,13 @@
 #define AIE1 BIT1
 #define AIE0 BIT0
 
-#define RTCSTAT 0x10
+#define RTCSTAT_READ 0x10
 #define IRQF1 BIT1
 #define IRQF0 BIT0
+
+#define RTC_ALARM0_WRITE 0x87
+#define RTC_ALARM1_WRITE 0x8B
+#define RTC_ALARM_MASK_BIT BIT7
 //================================================//
 
 
@@ -56,14 +60,18 @@ void configPort(void);
 void configSPI(void);
 void setRTC(void);
 void configUART(void);
-void enableWriteProtectionRTC(uint8_t);                           //If parameter is 1, enables Write Protection. If 0, disables Write Protection
+
+void writeRTCCTL(uint8_t);                           //If parameter is 1, enables Write Protection. If 0, disables Write Protection
 void readRTC();                                         //Reads the current RTC registers and stores them in currentTime[]
 void waitForTX();
 void waitForRX();
+
 void setRTCLoop();
 void readRTCLoop();
+
 void printTimeOnPC();
 void prepareTimeForPC();
+void setRTCAlarm1();
 
 //=============================Global variables=============================//
 uint8_t timeProfile[7] = {SECOND, MINUTE, HOUR, DAY, DATE, MONTH, YEAR};         //The first element of the array contains the array from which the
@@ -73,6 +81,11 @@ volatile uint8_t currentTime[7];                                                
 volatile uint8_t timeForPC[FORMATTED_TIME_LENGTH];                              //This array contains formatted time to be sent via UART
 volatile uint8_t TXCount, RXCount;                                                    //To control the number of TX and RX
 
+volatile struct allFlags{
+    uint8_t RXCount;
+    uint8_t TXCount;
+
+};
 void main(){
 
 
@@ -81,23 +94,36 @@ void main(){
 
     //Configuring DCO to operate at 1 MHz
     DCOCTL = 0;
-    BCSCTL1 = 135;
-    DCOCTL = 47;
+    BCSCTL1 = CALBC1_1MHZ;
+    DCOCTL = CALDCO_1MHZ;
 
 
     configPort();
     configSPI();
     configUART();
+    setRTCAlarm1();
+
+    P2IE |= RTC_ALARM;
+
+    __bis_SR_register(GIE);
 
     while(1){
 
-    readRTC();
+    readRTCLoop();
     prepareTimeForPC();
 
     printTimeOnPC();
 
-    P2IE |= RTC_ALARM;
-    __bis_SR_register(LPM4_bits + GIE);
+
+    __bis_SR_register(LPM0_bits);
+
+    __bic_SR_register(GIE);
+    P2OUT |= CE;
+    waitForTX();
+    UCB0TXBUF = 0x0F;           //TO clear IRQF1
+    waitForRX();
+    RXCount = UCB0RXBUF;
+    P2OUT &= ~CE;
     }
 
 }
@@ -112,11 +138,9 @@ __interrupt void RX_ISR(void){
         if(RXCount >= 7){
             IE2 &= ~UCB0RXIE;                           //After reception of all 7 bytes, disable further RX interrupts
             IFG2 &= ~UCB0RXIFG;
-            __bic_SR_register_on_exit(LPM4_bits + GIE); //Also exit LPM4
+            __bic_SR_register_on_exit(LPM0_bits);       //Also exit LPM0
         }
     }
-
-
 }
 
 #pragma vector = USCIAB0TX_VECTOR
@@ -133,12 +157,11 @@ __interrupt void TX_ISR(void){
 
     if((IFG2 & UCA0TXIFG) && (IE2 & UCA0TXIE)){
 
-        UCA0TXBUF = timeForPC[TXCount];            //This would acknowledge by clearing UCA0TXIFG
+        UCA0TXBUF = timeForPC[TXCount++];            //This would acknowledge by clearing UCA0TXIFG
 
-        TXCount++;
         if(TXCount >= FORMATTED_TIME_LENGTH){
             IE2 &= ~UCA0TXIE;
-            __bic_SR_register_on_exit(LPM4_bits + GIE);
+            __bic_SR_register_on_exit(LPM0_bits);
         }
     }
 
@@ -148,7 +171,9 @@ __interrupt void TX_ISR(void){
 __interrupt void PORT2_ISR(void){
     if(P2IFG & RTC_ALARM){
         P2IFG &= ~RTC_ALARM;                            //Acknowledges the Interrupt
-        __bic_SR_register_on_exit(LPM4_bits + GIE);
+        //if(!(IE2 & (UCB0TXIE + UCB0RXIE + UCA0TXIE + UCA0RXIE))){
+        __bic_SR_register_on_exit(LPM0_bits);
+        //}
     }
 }
 
@@ -162,15 +187,15 @@ void configPort(){
     P2IES &= ~RTC_ALARM;        //Alarm is active high. So EDGE is rising
 
     //Configuring USCIB0
-    P1SEL = SPI_SOMI + SPI_SIMO + SPI_CLK + UART_TX + UART_RX;
-    P1SEL2 = SPI_SOMI + SPI_SIMO + SPI_CLK + UART_TX + UART_RX;
+    P1SEL |= SPI_SOMI + SPI_SIMO + SPI_CLK + UART_TX + UART_RX;
+    P1SEL2 |= SPI_SOMI + SPI_SIMO + SPI_CLK + UART_TX + UART_RX;
 
     P1REN |= ~(SPI_SOMI + SPI_SIMO + SPI_CLK + UART_TX + UART_RX);      //PORT1 Unused pulled-down
     P1OUT &= SPI_SOMI + SPI_SIMO + SPI_CLK + UART_TX + UART_RX;
 
 
-    P2REN |= ~CE ;                                                      //PORT2 Unused pulled-down
-    P2OUT &= CE;
+    P2REN |= ~(CE + RTC_ALARM) ;                                                      //PORT2 Unused pulled-down
+    P2OUT &= CE + RTC_ALARM;
 
 }
 
@@ -195,12 +220,12 @@ void setRTC(){
        IE2 |= UCB0TXIE;                 //Enable interrupts only for Transmitting
 
        TXCount = 0;
-       __bis_SR_register(LPM4_bits + GIE);
+       __bis_SR_register(LPM0_bits + GIE);
 
        P2OUT &= ~CE;                    //Deselect the CHIP
 }
 
-void enableWriteProtectionRTC(uint8_t option){
+void writeRTCCTL(volatile uint8_t option){
 
     P2OUT |= CE;
 
@@ -208,15 +233,9 @@ void enableWriteProtectionRTC(uint8_t option){
     UCB0TXBUF = RTCCTL_WRITE;
 
     waitForTX();
-    if(option){
-        UCB0TXBUF = WP;                       //Write Protection, 1 Hz enabled and alarm interrupts disabled
+    UCB0TXBUF = option;
 
-    }
-    else{
-        UCB0TXBUF = 0x00;                         //Write Protection, all alarms and 1 Hz output disabled
-    }
-
-    waitForTX();
+    waitForRX();
 
     P2OUT &= ~CE;
 }
@@ -239,15 +258,14 @@ void readRTC(){
     waitForTX();
     UCB0TXBUF = 0x00;                       //0x00 - Writing the base address for READING IN BURST MODE
 
-    while(!(IFG2 & UCB0RXIFG));
-    IFG2 &= ~UCB0RXIFG;
-
     TXCount = RXCount = 0;
+
+    while(UCB0STAT & UCBUSY);
+    IFG2 &= ~UCB0RXIFG;
 
     IE2 |= UCB0RXIE + UCB0TXIE;                     //Enabling RXIE to copy received data
 
-    __bis_SR_register(LPM4_bits + GIE);
-
+    __bis_SR_register(LPM0_bits);
 
     P2OUT &= ~CE;
 }
@@ -284,7 +302,7 @@ void prepareTimeForPC(){
 void printTimeOnPC(){
     IE2 |= UCA0TXIE;
     TXCount = 0;                            //To keep a tab on number of Bytes sent
-    __bis_SR_register(LPM4_bits + GIE);     //Go to sleep and wait till TXBUF is empty. When empty, service the ISR
+    __bis_SR_register(LPM0_bits);     //Go to sleep and wait till TXBUF is empty. When empty, service the ISR
 
 }
 
@@ -293,13 +311,15 @@ void waitForTX(){
 }
 
 void waitForRX(){
-    while(UCB0STAT & UCBUSY);
+    while(!(IFG2 & UCB0RXIFG));
 }
 
 void setRTCLoop(){                              //Sets the current time in RTC by a blocking routine
 
 
-    enableWriteProtectionRTC(0);
+    writeRTCCTL(0);                //This resets the RTCCTL; Allows Writing in RTC registers;
+                                   //Caution: This will disable all Alarms. Make a point to configure alarms after configuring RTC time registers,
+                                   //if needed
 
     P2OUT |= CE;
     UCB0TXBUF = 0x80;
@@ -311,7 +331,7 @@ void setRTCLoop(){                              //Sets the current time in RTC b
     }
     P2OUT &= ~CE;
 
-    enableWriteProtectionRTC(1);
+    writeRTCCTL(WP);               //To prevent future overwrite of RTC registers. Note: No alarms enabled
 }
 
 
@@ -333,5 +353,35 @@ void readRTCLoop(){                             //Read and place the current tim
 
     P2OUT &= ~CE;
 
+}
+
+void setRTCAlarm1(){
+    //===========FIRST CONVERSATION==============//
+    writeRTCCTL(0x00);                     //Disables WP and all interrupts in RTC
+
+    //==========NEXT CONVERSATION============//
+    P2OUT |= CE;
+
+        waitForTX();
+        UCB0TXBUF = RTC_ALARM1_WRITE;           //ADDRESS of ALARM1 in WRITE mode
+
+        //This configuration triggers alarm every second
+        waitForTX();
+        UCB0TXBUF = RTC_ALARM_MASK_BIT;         //SEC ALARM1
+
+        waitForTX();
+        UCB0TXBUF = RTC_ALARM_MASK_BIT;         //MIN ALARM1
+
+        waitForTX();
+        UCB0TXBUF = RTC_ALARM_MASK_BIT;         //HOUR ALARM1
+
+        waitForTX();
+        UCB0TXBUF = RTC_ALARM_MASK_BIT;         //DAY ALARM1
+
+        waitForRX();
+    P2OUT &= ~CE;
+
+    //==========NEXT CONVERSATION============//
+    writeRTCCTL(AIE1);
 }
 
